@@ -3,6 +3,7 @@
 namespace App\Repositories\Task;
 
 use App\Models\Task;
+use App\Models\User;
 use App\Repositories\Interfaces\TaskRepositoryInterface;
 use App\Services\ActivityLog\ActivityLogService;
 use Illuminate\Http\JsonResponse;
@@ -34,6 +35,7 @@ class TaskRepository implements TaskRepositoryInterface
     {
         if ($request->filled('status') && ! in_array($request->input('status'), self::VALID_STATUSES, true)) {
             return response()->json([
+                'status' => false,
                 'message' => 'Invalid status value.',
                 'errors' => [
                     'status' => ['Allowed values: ' . implode(', ', self::VALID_STATUSES)],
@@ -43,6 +45,7 @@ class TaskRepository implements TaskRepositoryInterface
 
         if ($request->filled('priority') && ! in_array($request->input('priority'), self::VALID_PRIORITIES, true)) {
             return response()->json([
+                'status' => false,
                 'message' => 'Invalid priority value.',
                 'errors' => [
                     'priority' => ['Allowed values: ' . implode(', ', self::VALID_PRIORITIES)],
@@ -52,6 +55,7 @@ class TaskRepository implements TaskRepositoryInterface
 
         $query = Task::query()
             ->with(['contact', 'assignedTo', 'createdBy'])
+            ->withCount('comments')
             ->when($request->filled('status'), fn($q) => $q->where('status', $request->input('status')))
             ->when($request->filled('priority'), fn($q) => $q->where('priority', $request->input('priority')))
             ->when($request->filled('assigned_to'), fn($q) => $q->where('assigned_to', $request->integer('assigned_to')))
@@ -126,6 +130,74 @@ class TaskRepository implements TaskRepositoryInterface
     public function delete(Task $task): void
     {
         $task->delete();
+    }
+
+    /**
+     * Tasks assigned to a specific user — reuses index() so status/priority/
+     * contact_id filters and pagination all still work the same way.
+     */
+    public function forUser(int $userId, Request $request): JsonResponse|array
+    {
+        $request->merge(['assigned_to' => $userId]);
+
+        return $this->index($request);
+    }
+
+    /**
+     * Users who currently have at least one task assigned to them, with a
+     * count of how many.
+     */
+    public function usersWithTasks(Request $request): array
+    {
+        $perPage = (int) $request->input('per_page', 10);
+        $currentPage = (int) $request->input('currentPage', 1);
+
+        $paginator = User::query()
+            ->whereHas('assignedTasks')
+            ->withCount('assignedTasks')
+            ->orderByDesc('assigned_tasks_count')
+            ->paginate($perPage, ['*'], 'page', $currentPage);
+
+        return [
+            'items' => $paginator->items(),
+            'pagination' => [
+                'current_page' => $paginator->currentPage(),
+                'total_pages' => $paginator->lastPage(),
+                'per_page' => $paginator->perPage(),
+                'total_items' => $paginator->total(),
+            ],
+        ];
+    }
+
+    /**
+     * A single user plus their paginated assigned tasks.
+     */
+    public function singleUserWithTasks(int $userId, Request $request): array
+    {
+        $user = User::findOrFail($userId);
+
+        $perPage = (int) $request->input('per_page', 10);
+        $currentPage = (int) $request->input('currentPage', 1);
+
+        $tasksPaginator = Task::query()
+            ->with(['contact', 'assignedTo', 'createdBy'])
+            ->withCount('comments')
+            ->where('assigned_to', $userId)
+            ->orderByDesc('id')
+            ->paginate($perPage, ['*'], 'page', $currentPage);
+
+        return [
+            'user' => $user,
+            'tasks' => [
+                'items' => $tasksPaginator->items(),
+                'pagination' => [
+                    'current_page' => $tasksPaginator->currentPage(),
+                    'total_pages' => $tasksPaginator->lastPage(),
+                    'per_page' => $tasksPaginator->perPage(),
+                    'total_items' => $tasksPaginator->total(),
+                ],
+            ],
+        ];
     }
 
     private function paginate($query, Request $request): array

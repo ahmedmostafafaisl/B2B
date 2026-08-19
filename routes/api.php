@@ -187,6 +187,13 @@ Route::get('/activity-logs', [ActivityLogController::class, 'index'])->middlewar
 
 // Tasks routes — internal feature, everything requires auth.
 Route::middleware('auth:sanctum')->group(function () {
+    // These three must be registered before apiResource('tasks', ...) —
+    // otherwise "assignees"/"user" would be captured by the {task} show
+    // route as if they were a task ID.
+    Route::get('tasks/assignees', [TaskController::class, 'usersWithTasks']);
+    Route::get('tasks/assignees/{userId}', [TaskController::class, 'singleUserWithTasks']);
+    Route::get('tasks/user/{userId}', [TaskController::class, 'userTasks']);
+
     Route::apiResource('tasks', TaskController::class);
 
     Route::get('tasks/{task}/comments', [TaskCommentController::class, 'index']);

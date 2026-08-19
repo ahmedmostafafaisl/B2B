@@ -77,4 +77,10 @@ class User extends Authenticatable
     {
         return $this->hasMany(TechNotification::class);
     }
+
+    // tasks assigned to this user (Task management module)
+    public function assignedTasks()
+    {
+        return $this->hasMany(Task::class, 'assigned_to');
+    }
 }

@@ -17,4 +17,10 @@ interface TaskRepositoryInterface
     public function update(Task $task, array $data): Task;
 
     public function delete(Task $task): void;
+
+    public function forUser(int $userId, Request $request): JsonResponse|array;
+
+    public function usersWithTasks(Request $request): array;
+
+    public function singleUserWithTasks(int $userId, Request $request): array;
 }
