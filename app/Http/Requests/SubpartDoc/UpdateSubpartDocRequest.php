@@ -1,0 +1,19 @@
+<?php
+
+namespace App\Http\Requests\SubpartDoc;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class UpdateSubpartDocRequest extends FormRequest
+{
+    public function authorize(): bool { return true; }
+
+    public function rules(): array
+    {
+        return [
+            'sub_part_id' => ['sometimes','integer','exists:sub_parts,id'],
+            'title' => ['sometimes','string','max:255'],
+            'file' => ['sometimes','file','mimetypes:application/pdf','max:20480'],
+        ];
+    }
+}

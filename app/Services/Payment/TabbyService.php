@@ -1,0 +1,483 @@
+<?php
+
+namespace App\Services\Payment;
+
+
+use App\Models\Appointment;
+use App\Models\TabbyPayment;
+use App\Models\DyPaymentLink;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Http;
+use App\Models\DirectAppointmentPayment;
+use PhpParser\Node\Scalar\MagicConst\Dir;
+
+class TabbyService
+{
+    private $environment = 'test'; // 'production' or 'test'
+    private $tabbyBaseUrl = 'https://api.tabby.ai/api/v2/';
+    private $merchantUrlsBase = "https://prod-api.naqiwash.com/api/tabby/";
+
+    private $tabbySecretKey;
+    private $tabbyPublicKey;
+
+    public function __construct()
+    {
+        if ($this->environment == 'production') {
+            // Live keys
+            $this->tabbySecretKey = 'pk_01965838-358e-3ca0-7761-95ad3c0d243d';
+            $this->tabbyPublicKey = 'sk_01965838-358e-3ca0-7761-95ae2c06bfa6';
+        } else {
+            // Test keys
+            $this->tabbySecretKey = 'sk_test_01965838-358e-3ca0-7761-95af40bee90c';
+            $this->tabbyPublicKey = 'pk_test_01965838-358e-3ca0-7761-95aeb9cb06df';
+        }
+    }
+
+    // 1- create checkout
+
+
+    public function checkout(Appointment $appointment, float $amount,  $phone, $isSingle)
+    {
+        $user = $appointment->customer ?? auth()->user();
+        $address = $appointment->appAddress;
+
+        // Build routes with array sales_ids (Laravel will serialize them into multiple query params)
+        $urls = [
+            "success" => route('tabby.success', [
+                'appointment_id' => $appointment->id,
+                'is_single' => $isSingle,
+                'amount' => $amount,
+                'phone' => $phone ?? "500000001",
+            ]),
+            "cancel" => route('tabby.cancel', [
+                'appointment_id' => $appointment->id,
+                'is_single' => $isSingle,
+                'amount' => $amount,
+                'phone' => $phone ?? "500000001",
+            ]),
+            "failure" => route('tabby.failure', [
+                'appointment_id' => $appointment->id,
+                'is_single' => $isSingle,
+                'amount' => $amount,
+                'phone' => $phone ?? "500000001",
+            ]),
+        ];
+        $latitude = $appointment->latitude ?? "25.867589";
+        $longitude = $appointment->longitude ?? "45.367350";
+
+        $payload = [
+            "payment" => [
+                "amount" => (string)$amount,
+                "currency" => "SAR",
+                "description" => "Appointment #{$appointment->id}",
+                "buyer" => [
+                    "phone" => $phone ?? "500000001",
+                    // "email" => $user->email,
+                    "name" => $user->username ?? "Naqi",
+                    "dob" => $user->birth_date ?? "1996-08-24",
+                ],
+                // "shipping_address" => [
+                //     "city" => $address->city ?? "Riyadh",
+                //     "address" => $address->country ?? "Saudi Arabia",
+                //     "zip" => "1234",
+                // ],
+                "order" => [
+                    "reference_id" => (string) $appointment->id,
+                    "updated_at" => Carbon::now()->toIso8601String(),
+                    "tax_amount" => "0.00",
+                    "shipping_amount" => "0.00",
+                    "discount_amount" => "0.00",
+                    "items" => $appointment->lines->map(function ($item) {
+                        return [
+                            "title" => $item->name ?? "Service",
+                            "description" => $item->description ?? "Appointment item",
+                            "quantity" => $item->quantity ?? 1,
+                            "unit_price" => number_format($item->price, 2, '.', ''),
+                            "discount_amount" => number_format($item->discount ?? 0.00, 2, '.', ''),
+                            "reference_id" => (string) $item->id,
+                            "category" => "Services",
+                            "is_refundable" => true,
+                        ];
+                    })->toArray(),
+                ],
+                "attachment" => [
+                    "body"         => json_encode([
+                        // put location
+                        "location" => "{$latitude}, {$longitude}"
+                    ]),
+                    "content_type" => "application/vnd.tabby.v1+json"
+                ],
+            ],
+            "lang" => "ar",
+            "merchant_code" => "Naqiappsau",
+            "merchant_urls" => $urls,
+            // "token" => null
+        ];
+
+
+        $response = Http::baseUrl($this->tabbyBaseUrl)
+            ->withHeaders([
+                'Authorization' => 'Bearer ' . $this->tabbySecretKey,
+                'Content-Type' => 'application/json',
+            ])
+            ->post("checkout", $payload);
+
+        $responseData = $response->json();
+
+        // ✅ Only proceed if no error AND id exists
+        if (
+            isset($responseData['status']) &&
+            $responseData['status'] === 'created' &&
+            isset($responseData['id']) &&
+            isset($responseData['configuration']['available_products']['installments'][0]['web_url'])
+        ) {
+            $webUrl = $responseData['configuration']['available_products']['installments'][0]['web_url'];
+
+            // 🔹 Now it's safe to call send_hpp_link
+            Http::baseUrl($this->tabbyBaseUrl)
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' . $this->tabbySecretKey,
+                    'Content-Type' => 'application/json',
+                ])
+                ->post("checkout/{$responseData['id']}/send_hpp_link", $payload);
+
+            // Save to DB
+            TabbyPayment::create([
+                'user_id'       => $user->id,
+                'reference_id'  => $responseData['id'],
+                'appointment_id' => $appointment->id,
+                'session_url'   => $webUrl,
+                'amount'        => $amount,
+                'status'        => 'created',
+            ]);
+
+            return response()->json([
+                'web_url'      => $webUrl,
+                'reference_id' => $responseData['id']
+            ], 200);
+        }
+
+        // ❌ Error case
+        return response()->json([
+            'error'   => $responseData['error']['message'] ?? 'Failed to create Tabby session.',
+            'details' => $responseData
+        ], 422);
+    }
+
+
+
+    // dy checkout
+    public function dyCheckout(array $data, array $payment)
+    {
+
+        $payload = [
+            "payment" => [
+                "amount" => $payment['amount'],
+                "currency" => "SAR",
+                "description" => "DY365 Payment",
+                "buyer" => [
+                    "phone" => str_replace("+966", "", $data['phone'] ?? "500000001"),
+                    "email" => $data['email'] ?? "card.success@tabby.ai", // ✅ Hardcoded to satisfy Tabby's test environment
+                    "name" => $data['name'] ?? "Naqi",
+                    "dob" => $data['dob'] ?? "1996-08-24",
+                ],
+
+                "shipping_address" => [
+                    "city" => $data['city'] ?? "Riyadh",
+                    "address" => $data['country'] ?? "Saudi Arabia",
+                    "zip" => $data['shipping_address']['zip'] ?? "1234",
+                ],
+                "order" => [
+                    "reference_id" => (string) $payment['reference_id'],
+                    "updated_at" => Carbon::now()->toIso8601String(),
+                    "tax_amount" => "0.00",
+                    "shipping_amount" => "0.00",
+                    "discount_amount" => "0.00",
+                    "items" => collect($payment['items'] ?? [])->map(function ($item) {
+                        return [
+                            "title" => $item['name'] ?? "Service",
+                            "description" => $item['description'] ?? "Sales item",
+                            "quantity" => $item['quantity'] ?? 1,
+                            "unit_price" => number_format($item['price'], 2, '.', ''),
+                            "discount_amount" => number_format($item['discount'] ?? 0.00, 2, '.', ''),
+                            "reference_id" => (string) $item['rec_id'],
+                            "category" => "Services",
+                            "is_refundable" => true,
+                        ];
+                    })->toArray(),
+                ]
+            ],
+            "lang" => "ar",
+            "merchant_code" => "SA",
+            "merchant_urls" => [
+                "success" => route('dy.tabby.success', [
+                    'reference_id'   => $payment['reference_id'],
+                    'payment_method' => $payment['payment_type'], // e.g., 'tabby', 'visa'
+                ]),
+                "cancel" => route('dy.tabby.cancel', [
+                    'reference_id'   => $payment['reference_id'],
+                    'payment_method' => $payment['payment_type'],
+                ]),
+                "failure" => route('dy.tabby.failure', [
+                    'reference_id'   => $payment['reference_id'],
+                    'payment_method' => $payment['payment_type'],
+                ]),
+            ],
+            "token" => null
+        ];
+
+        $response = Http::baseUrl($this->tabbyBaseUrl)
+            ->withHeaders([
+                'Authorization' => 'Bearer ' .  $this->tabbySecretKey,
+                'Content-Type' => 'application/json',
+            ])
+            ->post("checkout", $payload);
+
+        $responseData = $response->json();
+
+        if (isset($responseData['id'])) {
+            $response = Http::baseUrl($this->tabbyBaseUrl)
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' .  $this->tabbySecretKey,
+                    'Content-Type' => 'application/json',
+                ])
+                ->post("checkout/{$responseData['id']}/send_hpp_link", $payload);
+        }
+        if (
+            isset($responseData['status']) &&
+            $responseData['status'] === 'created' &&
+            isset($responseData['configuration']['available_products']['installments'][0]['web_url'])
+        ) {
+            $webUrl = $responseData['configuration']['available_products']['installments'][0]['web_url'];
+            // Save tabby session info
+            DyPaymentLink::create([
+                'payment_method' => 'tabby',
+                'payment_reference_id' => $responseData['id'],
+                'dy_reference_id' => $payment['reference_id'],
+                'checkout_url' => $webUrl,
+                'status' => 'created',
+                'amount' => $payment['amount'],
+                'phone' => $data['phone'] ?? '0522222222',
+            ]);
+            return response()->json([
+                'web_url' => $webUrl,
+                'reference_id' => $responseData['id']
+            ], 200);
+        }
+
+        return response()->json([
+            'error' => $responseData['error']['message'] ?? 'Failed to create Tabby session.',
+            'details' => $responseData
+        ], 422);
+    }
+
+
+    // new capture payment
+    public function checkoutNew($payment, $price, $phone, $sales_order_id)
+    {
+        $reference_id = $payment['reference_id'];
+        $payload = [
+            "payment" => [
+                "amount" => $price,
+                "currency" => "SAR",
+                "description" => "DY365 Payment",
+                "buyer" => [
+                    "phone" => str_replace("+966", "", $phone ?? "500000001"),
+                    "email" => $data['email'] ?? "card.success@tabby.ai", // ✅ Hardcoded to satisfy Tabby's test environment
+                    "name" => $data['name'] ?? "Naqi",
+                    "dob" => $data['dob'] ?? "1996-08-24",
+                ],
+
+                "shipping_address" => [
+                    "city" => $data['city'] ?? "Riyadh",
+                    "address" => $data['country'] ?? "Saudi Arabia",
+                    "zip" => $data['shipping_address']['zip'] ?? "1234",
+                ],
+                "order" => [
+                    "reference_id" => (string) $reference_id,
+                    "updated_at" => Carbon::now()->toIso8601String(),
+                    "tax_amount" => "0.00",
+                    "shipping_amount" => "0.00",
+                    "discount_amount" => "0.00",
+                    "items" => [
+                        [
+                            "title" =>  "Service",
+                            "description" =>  "Sales item",
+                            "quantity" => 1,
+                            "unit_price" =>  number_format($price ?? 0, 2, '.', ''),
+                            "discount_amount" => 0.00,
+                            "reference_id" => (string) $reference_id,
+                            "category" => "Services",
+                            "is_refundable" => true,
+                        ]
+                    ],
+
+                ]
+            ],
+            "lang" => "ar",
+            "merchant_code" => "SA",
+            "merchant_urls" => [
+                "success" => route('new.tabby.success', [
+                    'reference_id'   => $reference_id,
+                    'sales_order_id' => $sales_order_id,
+                ]),
+                "cancel" => route('new.tabby.cancel', [
+                    'reference_id'   => $reference_id,
+                    'sales_order_id' => $sales_order_id,
+                ]),
+                "failure" => route('new.tabby.failure', [
+                    'reference_id'   => $reference_id,
+                    'sales_order_id' => $sales_order_id,
+                ]),
+            ],
+            "token" => null
+        ];
+
+        $response = Http::baseUrl($this->tabbyBaseUrl)
+            ->withHeaders([
+                'Authorization' => 'Bearer ' .  $this->tabbySecretKey,
+                'Content-Type' => 'application/json',
+            ])
+            ->post("checkout", $payload);
+
+
+        $responseData = $response->json();
+
+
+        if (isset($responseData['id'])) {
+            $payment->payment_id = $responseData['id'];
+            $payment->save();
+            $response = Http::baseUrl($this->tabbyBaseUrl)
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' .  $this->tabbySecretKey,
+                    'Content-Type' => 'application/json',
+                ])
+                ->post("checkout/{$responseData['id']}/send_hpp_link", $payload);
+        }
+        if (
+            isset($responseData['status']) &&
+            $responseData['status'] === 'created' &&
+            isset($responseData['configuration']['available_products']['installments'][0]['web_url'])
+        ) {
+            $webUrl = $responseData['configuration']['available_products']['installments'][0]['web_url'];
+
+            return response()->json([
+                'web_url' => $webUrl,
+                'reference_id' => $responseData['id']
+            ], 200);
+        }
+
+        return response()->json(
+            [
+                'error' => $responseData['error']['message'] ?? 'Failed to create Tabby session.',
+                'details' => $responseData
+            ],
+            400
+        );
+    }
+
+    public function capturePaymentRequest($payment_id, $reference_id, $amount)
+    {
+        $http = Http::withToken($this->tabbySecretKey)
+            ->baseUrl($this->tabbyBaseUrl)
+            ->withHeaders(['Content-Type' => 'application/json']);
+
+        $response = $http->post("payments/$payment_id/captures", [
+            'amount' => $amount,
+            'currency' => 'SAR',
+            "tax_amount" => "0.00",
+            "shipping_amount" => "0.00",
+            "discount_amount" => "0.00",
+            'reference_id' => $reference_id,
+        ]);
+
+        return json_decode($response, true);
+    }
+
+
+
+
+    public function createSession($data)
+    {
+        $body = $this->getConfig($data);
+
+        Log::info(json_encode($body));
+        $http = Http::withToken($this->tabbyPublicKey)->baseUrl(url: $this->tabbyBaseUrl)->withHeaders(['Content-Type' => 'application/json']);
+        $response = $http->post('checkout', data: $body);
+        $response = json_decode($response->getBody()->getContents(), true);
+        return $response;
+    }
+
+    public function getConfig($data)
+    {
+        $now = Carbon::now();
+
+        return [
+            "payment" => [
+                "amount" => $data['amount'],
+                "currency" => "SAR",
+                "description" => "Centrial Payment",
+                "buyer" => [
+                    "phone" =>   $data['user']->phone,
+                    "email" =>   $data['user']->email ?? "card.success@tabby.ai",
+                    "name" => $data['user']->username ?? "Centerial Mall",
+                    "dob" => $data['user']->birth_date ?? "1996-08-24",
+                ],
+                "shipping_address" =>  [
+                    "city" => "Riyadh",
+                    "address" => "Saudi Riyadh",
+                    "zip" => "1234"
+                ],
+                "order" => [
+                    "tax_amount" => "0.00",
+                    "shipping_amount" => "0.00",
+                    "discount_amount" => "0.00",
+                    "updated_at" => $now,
+                    "reference_id" => $data['reference_id'],
+                    "items" => [
+                        [
+                            "title" => $data['lang'] == "ar" ? $data['item']->name_ar : $data['item']->name_en,
+                            "description" => $data['lang'] == "ar" ? $data['item']->name_ar : $data['item']->name_en,
+                            "quantity" => (int)$data['qty'],
+                            "unit_price" => (string)$data['item']->price,
+                            "discount_amount" => "0.00",
+                            "reference_id" => (string)$data['item']->id,
+                            "category" => "Car Services",
+                        ],
+                    ],
+                ],
+
+                "order_history" => null,
+                "meta" => [
+                    "order_id" => null,
+                    "customer" => null
+                ],
+                "attachment" => null
+            ],
+            "lang" => "ar",
+            "merchant_code" => "SA",
+            "merchant_urls" => [
+                "success" => "https://new.xn--shopperl-i1a.com/api/payment/success",
+                "cancel" => "https://new.xn--shopperl-i1a.com/api/payment/cancel",
+                "failure" => "https://new.xn--shopperl-i1a.com/api/payment/failure"
+            ],
+            "token" => null
+        ];
+    }
+
+
+    public function retrieveTabbySession($id)
+    {
+        $http = Http::withToken($this->tabbySecretKey)->baseUrl($this->tabbyBaseUrl);
+        $response = $http->get(url: "checkout/$id");
+        return json_decode($response->getBody()->getContents(), true);
+    }
+
+    public function retrieveTabbyPayment($id)
+    {
+        $http = Http::withToken($this->tabbySecretKey)->baseUrl($this->tabbyBaseUrl);
+        $response = $http->get("payments/$id");
+        return json_decode($response->getBody()->getContents(), true);
+    }
+}
