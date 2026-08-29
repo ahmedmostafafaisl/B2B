@@ -4,6 +4,8 @@ namespace App\Repositories\Task;
 
 use App\Models\Task;
 use App\Models\User;
+use App\Notifications\TaskAssignedNotification;
+use App\Notifications\TaskUpdatedNotification;
 use App\Repositories\Interfaces\TaskRepositoryInterface;
 use App\Services\ActivityLog\ActivityLogService;
 use Illuminate\Http\JsonResponse;
@@ -93,6 +95,8 @@ class TaskRepository implements TaskRepositoryInterface
             ]),
         );
 
+        $this->notifyAssignee($task);
+
         return $task;
     }
 
@@ -122,6 +126,13 @@ class TaskRepository implements TaskRepositoryInterface
                     'new_assigned_to'  => $task->assigned_to,
                 ],
             );
+
+            if (array_key_exists('assigned_to', $changes)) {
+                // Reassignment takes priority over a generic "updated" notice.
+                $this->notifyAssignee($task);
+            } else {
+                $this->notifyAssignee($task, array_keys($changes));
+            }
         }
 
         return $task->refresh();
@@ -130,6 +141,31 @@ class TaskRepository implements TaskRepositoryInterface
     public function delete(Task $task): void
     {
         $task->delete();
+    }
+
+    /**
+     * Notify the task's current assignee. With no $changedFields, this is
+     * treated as a (re)assignment; with fields, it's a generic update.
+     * Skipped when the assignee is the same person performing the action,
+     * to avoid notifying someone about their own change.
+     */
+    private function notifyAssignee(Task $task, array $changedFields = []): void
+    {
+        if (!$task->assigned_to || $task->assigned_to === Auth::id()) {
+            return;
+        }
+
+        $assignee = $task->assignedTo ?? User::find($task->assigned_to);
+
+        if (!$assignee) {
+            return;
+        }
+
+        if (empty($changedFields)) {
+            $assignee->notify(new TaskAssignedNotification($task, Auth::user()?->username));
+        } else {
+            $assignee->notify(new TaskUpdatedNotification($task, $changedFields, Auth::user()?->username));
+        }
     }
 
     /**

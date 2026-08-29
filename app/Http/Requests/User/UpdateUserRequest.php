@@ -31,6 +31,8 @@ class UpdateUserRequest extends FormRequest
             'tech_id' => 'sometimes',
             'technician_rec_id' => 'sometimes',
             'warehouse_id' => 'sometimes|string',
+            'subjects' => 'nullable|array',
+            'subjects.*' => 'integer|distinct|exists:subjects,id',
 
         ];
     }

@@ -7,11 +7,32 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Notification\SendBulkNotificationRequest;
+use App\Notifications\BulkDataNotification;
 use App\Notifications\TechNotification;
 use Illuminate\Support\Facades\Validator;
 
 class NotificationController extends Controller
 {
+    // ✅ Send the same arbitrary data payload to a list of user ids, stored
+    // as a database notification for each one.
+    public function sendBulk(SendBulkNotificationRequest $request)
+    {
+        $validated = $request->validated();
+
+        $users = User::whereIn('id', $validated['user_ids'])->get();
+
+        foreach ($users as $user) {
+            $user->notify(new BulkDataNotification($validated['data']));
+        }
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Notification stored for ' . $users->count() . ' user(s).',
+            'sent_to' => $users->pluck('id')->values(),
+        ]);
+    }
+
     // ✅ Send and store notification
     public function send(Request $request)
     {

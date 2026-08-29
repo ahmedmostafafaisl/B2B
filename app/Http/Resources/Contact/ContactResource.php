@@ -35,6 +35,18 @@ class ContactResource extends JsonResource
             'completed_at' => optional($this->completed_at)->toISOString(),
             'note' => $this->note,
 
+            'has_task' => (bool) ($this->tasks_exists ?? false),
+
+            'created_by' => $this->whenLoaded('latestTask', fn() => $this->latestTask?->createdBy ? [
+                'id'   => $this->latestTask->createdBy->id,
+                'name' => $this->latestTask->createdBy->username,
+            ] : null),
+
+            'assigned_to' => $this->whenLoaded('latestTask', fn() => $this->latestTask?->assignedTo ? [
+                'id'   => $this->latestTask->assignedTo->id,
+                'name' => $this->latestTask->assignedTo->username,
+            ] : null),
+
             'logs' => $this->whenLoaded('activityLogs', fn() => $this->activityLogs->map(function ($log) {
                 return [
                     'id'            => $log->id,

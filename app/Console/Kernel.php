@@ -13,14 +13,16 @@ class Kernel extends ConsoleKernel
     protected function schedule(Schedule $schedule): void
     {
         // $schedule->command('inspire')->hourly();
-$schedule->command('menu:sync-services --keep-custom=1')->dailyAt('02:00');
+        $schedule->command('menu:sync-services --keep-custom=1')->dailyAt('02:00');
+        $schedule->command('tasks:send-reminders')->dailyAt('08:00');
     }
 
     /**
      * Register the commands for the application.
      */
     protected $commands = [
-//        Commands\Inspire::class,
+        //        Commands\Inspire::class,
         Commands\SyncSidebarServices::class,
+        Commands\SendTaskReminders::class,
     ];
 }

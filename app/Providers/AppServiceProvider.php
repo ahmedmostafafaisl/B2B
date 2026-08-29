@@ -62,6 +62,12 @@ use App\Repositories\SideBar\MenuModuleRepository;
 use App\Repositories\SideBar\SidebarRepository;
 use App\Repositories\Solution\SolutionImageRepository;
 use App\Repositories\Solution\SolutionRepository;
+use App\Repositories\EventType\EventTypeRepository;
+use App\Repositories\Interfaces\EventTypeRepositoryInterface;
+use App\Repositories\Role\RoleRepository;
+use App\Repositories\Interfaces\RoleRepositoryInterface;
+use App\Repositories\UserEvent\UserEventRepository;
+use App\Repositories\Interfaces\UserEventRepositoryInterface;
 use App\Repositories\Subject\SubjectRepository;
 use App\Repositories\SubPart\SubPartRepository;
 use App\Repositories\SubpartApplication\SubpartApplicationRepository;
@@ -136,6 +142,9 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(ActivityLogRepositoryInterface::class, ActivityLogRepository::class);
         $this->app->bind(TaskRepositoryInterface::class, TaskRepository::class);
         $this->app->bind(TaskCommentRepositoryInterface::class, TaskCommentRepository::class);
+        $this->app->bind(RoleRepositoryInterface::class, RoleRepository::class);
+        $this->app->bind(EventTypeRepositoryInterface::class, EventTypeRepository::class);
+        $this->app->bind(UserEventRepositoryInterface::class, UserEventRepository::class);
     }
 
     /**

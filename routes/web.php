@@ -1,8 +1,6 @@
 <?php
 
-use Spatie\LaravelPdf\Facades\Pdf;
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\Api\User\UserStockController;
 
 /*
 |--------------------------------------------------------------------------
@@ -26,6 +24,3 @@ Route::get('/payment-success', function () {
     // Get from query string
     return view('Payment.result', compact('status', 'payment_type'));
 })->name('payment.success');
-
-
-Route::get('user-stock/export-all', [UserStockController::class, 'exportAllUsersStock']);

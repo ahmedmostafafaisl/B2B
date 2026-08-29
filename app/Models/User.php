@@ -33,6 +33,11 @@ class User extends Authenticatable
         'account_number',
         'address',
         'main_warehouse_id',
+        'last_login_at',
+    ];
+
+    protected $casts = [
+        'last_login_at' => 'datetime',
     ];
 
 
@@ -82,5 +87,17 @@ class User extends Authenticatable
     public function assignedTasks()
     {
         return $this->hasMany(Task::class, 'assigned_to');
+    }
+
+    // subjects this user handles (many-to-many via user_subjects)
+    public function subjects()
+    {
+        return $this->belongsToMany(Subject::class, 'user_subjects')->withTimestamps();
+    }
+
+    // events assigned to this user (vacations, schedules, etc.)
+    public function events()
+    {
+        return $this->hasMany(UserEvent::class);
     }
 }

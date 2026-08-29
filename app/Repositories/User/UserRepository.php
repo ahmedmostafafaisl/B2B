@@ -40,7 +40,7 @@ class UserRepository implements UserRepositoryInterface
                 ->send();
         }
 
-        $query = User::where('type', 'employee')
+        $query = User::with('subjects')->where('type', 'employee')
             ->when($role, function ($query, $role) {
                 $query->where('role', $role);
             })
@@ -162,7 +162,7 @@ class UserRepository implements UserRepositoryInterface
                 ->setMessage('You are not authorized to view this appointment.')
                 ->send();
         }
-        $user = User::where('id', $id)->first();
+        $user = User::with(['subjects', 'events.eventType'])->where('id', $id)->first();
         if (!$user) {
             return $this->setCode(code: 404)
                 ->setData([])
@@ -197,9 +197,13 @@ class UserRepository implements UserRepositoryInterface
         }
 
         // 'role' isn't a users-table column (it's handled via Spatie below),
-        // so it's excluded here rather than relying on it being silently
-        // dropped by mass assignment protection.
-        $user = User::create(Arr::except($data, ['role']));
+        // and 'subjects' is a many-to-many pivot, not a column — both are
+        // excluded here rather than relying on mass assignment protection.
+        $user = User::create(Arr::except($data, ['role', 'subjects']));
+
+        if (array_key_exists('subjects', $data)) {
+            $user->subjects()->sync($data['subjects'] ?? []);
+        }
 
         if (isset($data['role'])) {
             $role = Role::where('name', $data['role'])->first();
@@ -256,6 +260,11 @@ class UserRepository implements UserRepositoryInterface
             $data['image'] = $image_path;
         }
 
+        // 'subjects' is a many-to-many pivot, not a users-table column —
+        // pull it out before the mass update and sync separately.
+        $subjectIds = array_key_exists('subjects', $data) ? ($data['subjects'] ?? []) : null;
+        unset($data['subjects']);
+
         $user = User::where('id', $user->id)->first();
         if (isset($data['role'])) {
             // Assign role to the user
@@ -268,6 +277,11 @@ class UserRepository implements UserRepositoryInterface
         }
         // $user = User::where('id', $user->id)->first();
         $user->update($data);
+
+        if ($subjectIds !== null) {
+            $user->subjects()->sync($subjectIds);
+        }
+
         return  $this->setCode(200)->setData(new EmployeeResource($user))->setMessage('You are successfully update Profile.')->send();
     }
 
@@ -307,6 +321,7 @@ class UserRepository implements UserRepositoryInterface
 
         // Generate token
         $token = $user->createToken('auth_token')->plainTextToken;
+        $user->update(['last_login_at' => now()]);
 
         return $this->setCode(200)
             ->setData([
@@ -361,6 +376,7 @@ class UserRepository implements UserRepositoryInterface
             return  $this->setCode(401)->setData([])->setMessage('Invalid credentials')->send();
         }
         $token = $user->createToken('auth_token')->plainTextToken;
+        $user->update(['last_login_at' => now()]);
         return  $this->setCode(200)->setData(["user" => new UserResource($user), "token" =>  $token])->setMessage('You are successfully logged in.')->send();
     }
 

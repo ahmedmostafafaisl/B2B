@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Contact extends Model
 {
@@ -34,6 +35,22 @@ class Contact extends Model
     public function key(): BelongsTo
     {
         return $this->belongsTo(Key::class);
+    }
+
+    public function tasks(): HasMany
+    {
+        return $this->hasMany(Task::class);
+    }
+
+    /**
+     * The most recently created Task linked to this contact. Contact has no
+     * creator of its own, so "created_by" on a contact is derived from
+     * whoever created this task — same pattern as contact reminders, which
+     * also only flow through a linked task.
+     */
+    public function latestTask(): HasOne
+    {
+        return $this->hasOne(Task::class)->latestOfMany();
     }
 
     /**

@@ -27,7 +27,6 @@ interface UserRepositoryInterface
     public function approveResetRequest(int $userId, string $newPinCode): mixed;
 
     // Single User Appointments
-    public function singleUserAppointments($id, $perPage, $page);
     // Single User Tasks
     public function singleUserTasks($id, $perPage, $page);
 }

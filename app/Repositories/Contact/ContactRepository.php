@@ -41,7 +41,8 @@ class ContactRepository implements ContactRepositoryInterface
         }
 
         $query = Contact::query()
-            ->with(['subject', 'key', 'activityLogs', 'activityLogs.user'])
+            ->with(['subject', 'key', 'latestTask.createdBy', 'latestTask.assignedTo', 'activityLogs', 'activityLogs.user'])
+            ->withExists('tasks')
             ->when($request->filled('status'), fn($q) => $q->where('status', $request->input('status')))
             ->when($request->filled('subject_id'), fn($q) => $q->where('subject_id', $request->integer('subject_id')))
             ->orderByDesc('id');
@@ -52,7 +53,8 @@ class ContactRepository implements ContactRepositoryInterface
     public function findOrFail(int $id): Contact
     {
         return Contact::query()
-            ->with(['subject', 'key', 'activityLogs', 'activityLogs.user'])
+            ->with(['subject', 'key', 'latestTask.createdBy', 'latestTask.assignedTo', 'activityLogs', 'activityLogs.user'])
+            ->withExists('tasks')
             ->findOrFail($id);
     }
 

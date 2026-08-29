@@ -7,12 +7,15 @@ use App\Http\Controllers\Api\ActivityLog\ActivityLogController;
 use App\Http\Controllers\Api\Contact\ContactController;
 use App\Http\Controllers\Api\Contact\ContactMailController;
 use App\Http\Controllers\Api\Customer\CustomerController;
+use App\Http\Controllers\Api\EventType\EventTypeController;
 use App\Http\Controllers\Api\Faq\FaqController;
 use App\Http\Controllers\Api\GlobalSearch\GlobalSearchController;
 use App\Http\Controllers\Api\Key\KeyController;
+use App\Http\Controllers\Api\Notification\NotificationController;
 use App\Http\Controllers\Api\Part\PartController;
 use App\Http\Controllers\Api\Part\PartImageController;
 use App\Http\Controllers\Api\Partner\PartnerController;
+use App\Http\Controllers\Api\Role\RoleController;
 use App\Http\Controllers\Api\Service\ServiceController;
 use App\Http\Controllers\Api\Service\ServiceImageController;
 use App\Http\Controllers\Api\ServiceType\ServiceTypeController;
@@ -41,6 +44,7 @@ use App\Http\Controllers\Api\SubservienceSpecification\SubservienceSpecification
 use App\Http\Controllers\Api\Task\TaskCommentController;
 use App\Http\Controllers\Api\Task\TaskController;
 use App\Http\Controllers\Api\User\UserController;
+use App\Http\Controllers\Api\UserEvent\UserEventController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -92,6 +96,25 @@ Route::post('auth/pin-reset/request', [UserController::class, 'requestPinReset']
 
 Route::middleware(['auth:api', 'can:update users'])->group(function () {
     Route::post('auth/pin-reset/approve', [UserController::class, 'approveResetRequest']);
+});
+
+// Roles routes — full CRUD. Deactivating a role (status: inactive) or
+// deleting it sets status='inactive' on every user who holds that role.
+Route::middleware('auth:sanctum')->group(function () {
+    Route::apiResource('roles', RoleController::class);
+});
+
+// Event types — the catalog of event kinds (vacation, sick leave, shift, ...).
+Route::middleware('auth:sanctum')->group(function () {
+    Route::apiResource('event-types', EventTypeController::class);
+});
+
+// User events — assigning an event type to one or more users. store() is a
+// bulk operation: send user_ids as an array and one row is created per user,
+// all sharing the same event_type/status/note/schedule. show/update/destroy
+// operate on a single row.
+Route::middleware('auth:sanctum')->group(function () {
+    Route::apiResource('user-events', UserEventController::class);
 });
 
 //  Customers routes
@@ -199,6 +222,24 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('tasks/{task}/comments', [TaskCommentController::class, 'index']);
     Route::post('tasks/{task}/comments', [TaskCommentController::class, 'store']);
     Route::delete('task-comments/{comment}', [TaskCommentController::class, 'destroy']);
+});
+
+// Notifications — wires up the previously-unrouted NotificationController.
+// Task create/reassign/update fire TaskAssignedNotification /
+// TaskUpdatedNotification automatically from TaskRepository; due-date
+// reminders (which also cover contacts, via their linked task) are sent by
+// the tasks:send-reminders scheduled command. `send` / `send-tech` below
+// let any authenticated user push a notification to any user_id — that's
+// pre-existing behavior, not something added here, but worth gating with a
+// permission before relying on it.
+Route::middleware('auth:sanctum')->prefix('notifications')->group(function () {
+    Route::get('/', [NotificationController::class, 'index']);
+    Route::get('/unread', [NotificationController::class, 'unread']);
+    Route::post('/{id}/read', [NotificationController::class, 'markAsRead']);
+    Route::post('/read-all', [NotificationController::class, 'markAllAsRead']);
+    Route::post('/send', [NotificationController::class, 'send']);
+    Route::post('/send-bulk', [NotificationController::class, 'sendBulk']);
+    Route::post('/send-tech', [NotificationController::class, 'sendTechNotification']);
 });
 
 // Sub Services routes
