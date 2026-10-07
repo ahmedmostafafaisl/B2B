@@ -23,6 +23,8 @@ class ContactRepository implements ContactRepositoryInterface
         'no_response',
         'awaiting_response',
         'unable_to_contact',
+        'supplier_registration',
+        'inquiry',
     ];
 
     public function __construct(
@@ -41,7 +43,7 @@ class ContactRepository implements ContactRepositoryInterface
         }
 
         $query = Contact::query()
-            ->with(['subject', 'key', 'latestTask.createdBy', 'latestTask.assignedTo', 'activityLogs', 'activityLogs.user'])
+            ->with(['subject', 'key', 'latestTask.createdBy', 'latestTask.assignedTo', 'closingReasons', 'activityLogs', 'activityLogs.user'])
             ->withExists('tasks')
             ->when($request->filled('status'), fn($q) => $q->where('status', $request->input('status')))
             ->when($request->filled('subject_id'), fn($q) => $q->where('subject_id', $request->integer('subject_id')))
@@ -53,30 +55,32 @@ class ContactRepository implements ContactRepositoryInterface
     public function findOrFail(int $id): Contact
     {
         return Contact::query()
-            ->with(['subject', 'key', 'latestTask.createdBy', 'latestTask.assignedTo', 'activityLogs', 'activityLogs.user'])
+            ->with(['subject', 'key', 'latestTask.createdBy', 'latestTask.assignedTo', 'closingReasons', 'activityLogs', 'activityLogs.user'])
             ->withExists('tasks')
             ->findOrFail($id);
     }
 
     public function store(array $data): Contact
     {
+        $closingReasonIds = $data['closing_reasons'] ?? null;
+        unset($data['closing_reasons']);
+
         $contact = Contact::create($data);
+
+        if (!empty($closingReasonIds)) {
+            $contact->closingReasons()->sync($closingReasonIds);
+        }
 
         $this->activityLogService->record(
             model: $contact,
             action: 'create',
             newValues: $contact->only([
-                'subject_id',
-                'key_id',
-                'name',
-                'email',
-                'phone',
-                'message',
-                'status',
+                'subject_id', 'key_id', 'name', 'email', 'phone', 'message', 'status',
+                'source', 'utm_source', 'utm_campaign', 'prod_category', 'utm_medium', 'source_page',
             ]),
         );
 
-        return $contact;
+        return $contact->load('closingReasons');
     }
 
     public function update(Contact $contact, array $data): Contact
@@ -84,12 +88,14 @@ class ContactRepository implements ContactRepositoryInterface
         $note = $data['note'] ?? null;
         unset($data['note']);
 
+        $closingReasonIds = array_key_exists('closing_reasons', $data) ? ($data['closing_reasons'] ?? []) : null;
+        unset($data['closing_reasons']);
+
         $contact->fill($data);
         $changes = $contact->getDirty();
 
         if (!empty($changes) || $note !== null) {
 
-            // ── Old values — include all changed fields + note + status ──
             $oldValues = [];
 
             foreach ($changes as $field => $value) {
@@ -99,18 +105,15 @@ class ContactRepository implements ContactRepositoryInterface
             $oldValues['note']   = $contact->getOriginal('note')   ?? $contact->note;
             $oldValues['status'] = $contact->getOriginal('status') ?? $contact->status;
 
-            // ── Save changed fields ───────────────────────────────────────
             if (!empty($changes)) {
                 $contact->save();
             }
 
-            // ── Save note separately ──────────────────────────────────────
             if ($note !== null) {
                 $contact->note = $note;
                 $contact->save();
             }
 
-            // ── New values — all changes + note + current status ─────────
             $newValues = array_merge($changes, [
                 'note'   => $note,
                 'status' => $contact->status,
@@ -129,7 +132,11 @@ class ContactRepository implements ContactRepositoryInterface
             );
         }
 
-        return $contact->refresh();
+        if ($closingReasonIds !== null) {
+            $contact->closingReasons()->sync($closingReasonIds);
+        }
+
+        return $contact->refresh()->load('closingReasons');
     }
 
     public function delete(Contact $contact): void
@@ -137,7 +144,6 @@ class ContactRepository implements ContactRepositoryInterface
         $contact->delete();
     }
 
-    // ✅ SAME pagination format you use everywhere
     private function paginate($query, Request $request): array
     {
         $perPage = (int) $request->input('per_page', 10);

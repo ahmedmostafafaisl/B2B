@@ -6,6 +6,7 @@ use App\Traits\HasActivityLogs;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
@@ -21,10 +22,21 @@ class Contact extends Model
         'email',
         'phone',
         'message',
+        'source',
+        'utm_source',
+        'utm_campaign',
+        'prod_category',
+        'utm_medium',
+        'source_page',
         'status',
         'offer_price',
         'completed_at',
         'note',
+    ];
+
+    protected $casts = [
+        'offer_price' => 'decimal:2',
+        'completed_at' => 'datetime',
     ];
 
     public function subject(): BelongsTo
@@ -44,13 +56,20 @@ class Contact extends Model
 
     /**
      * The most recently created Task linked to this contact. Contact has no
-     * creator of its own, so "created_by" on a contact is derived from
-     * whoever created this task — same pattern as contact reminders, which
-     * also only flow through a linked task.
+     * creator of its own, so "created_by"/"assigned_to" on a contact are
+     * derived from this task instead.
      */
     public function latestTask(): HasOne
     {
         return $this->hasOne(Task::class)->latestOfMany();
+    }
+
+    /**
+     * A contact can have one or more closing reasons.
+     */
+    public function closingReasons(): BelongsToMany
+    {
+        return $this->belongsToMany(ClosingReason::class, 'contact_closing_reasons')->withTimestamps();
     }
 
     /**

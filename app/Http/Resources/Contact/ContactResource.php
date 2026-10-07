@@ -30,6 +30,14 @@ class ContactResource extends JsonResource
             'email' => $this->email,
             'phone' => $this->phone,
             'message' => $this->message,
+
+            'source' => $this->source,
+            'utm_source' => $this->utm_source,
+            'utm_campaign' => $this->utm_campaign,
+            'prod_category' => $this->prod_category,
+            'utm_medium' => $this->utm_medium,
+            'source_page' => $this->source_page,
+
             'status' => $this->status,
             'offer_price' => $this->offer_price,
             'completed_at' => optional($this->completed_at)->toISOString(),
@@ -46,6 +54,12 @@ class ContactResource extends JsonResource
                 'id'   => $this->latestTask->assignedTo->id,
                 'name' => $this->latestTask->assignedTo->username,
             ] : null),
+
+            'closing_reasons' => $this->whenLoaded('closingReasons', fn() => $this->closingReasons->map(fn($reason) => [
+                'id'    => $reason->id,
+                'name'  => $reason->name,
+                'label' => $reason->label,
+            ])),
 
             'logs' => $this->whenLoaded('activityLogs', fn() => $this->activityLogs->map(function ($log) {
                 return [
